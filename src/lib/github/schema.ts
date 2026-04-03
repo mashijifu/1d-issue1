@@ -1,5 +1,19 @@
 import { z } from "zod";
 
+/** GitHub ログイン名に近い制約（パストラバーサルや余分なセグメントを防ぐ） */
+export const githubOwnerParamSchema = z
+  .string()
+  .min(1)
+  .max(39)
+  .regex(/^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9]))*$/);
+
+/** リポジトリ名（API パス用。記号は GitHub が許容する範囲に限定） */
+export const githubRepoParamSchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(/^[a-zA-Z0-9._-]+$/);
+
 export const repositoryOwnerSchema = z.object({
   login: z.string(),
   avatar_url: z.string().url(),
@@ -26,7 +40,11 @@ export const githubSearchResponseSchema = z.object({
 });
 
 export const searchRepositoriesParamsSchema = z.object({
-  q: z.string().trim().min(1, "検索キーワードを入力してください。"),
+  q: z
+    .string()
+    .trim()
+    .min(1, "検索キーワードを入力してください。")
+    .max(256, "検索キーワードは256文字以内にしてください。"),
   page: z.coerce.number().int().min(1).default(1),
   perPage: z.coerce.number().int().min(1).max(30).default(10),
 });
