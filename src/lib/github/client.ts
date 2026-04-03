@@ -1,25 +1,19 @@
+import { ZodError } from "zod";
+
+import { GithubClientError, GithubValidationError } from "@/lib/github/errors";
 import {
+  githubRepoParamSchema,
+  githubOwnerParamSchema,
   githubRepositorySchema,
   githubSearchResponseSchema,
   searchRepositoriesParamsSchema,
 } from "@/lib/github/schema";
-import type {
-  GithubApiError,
-  RepositoryDetail,
-  RepositorySearchResult,
-} from "@/lib/github/types";
+import type { RepositoryDetail, RepositorySearchResult } from "@/lib/github/types";
+import { RateLimitError } from "@/lib/security/rate-limit";
 
 const GITHUB_API_BASE_URL = "https://api.github.com";
 
-class GithubClientError extends Error {
-  status: number;
-
-  constructor({ message, status }: GithubApiError) {
-    super(message);
-    this.name = "GithubClientError";
-    this.status = status;
-  }
-}
+export { GithubClientError, GithubValidationError } from "@/lib/github/errors";
 
 function createHeaders() {
   const headers = new Headers({
@@ -58,7 +52,17 @@ async function requestGitHub<T>(
   }
 
   const json = (await response.json()) as unknown;
-  return schema.parse(json);
+  try {
+    return schema.parse(json);
+  } catch (error) {
+    if (error instanceof ZodError) {
+      throw new GithubClientError({
+        status: 502,
+        message: "GitHub APIの応答形式が想定と異なりました。",
+      });
+    }
+    throw error;
+  }
 }
 
 export async function searchRepositories(
@@ -103,10 +107,20 @@ export async function getRepositoryDetail(
   owner: string,
   repo: string,
 ): Promise<RepositoryDetail> {
-  const response = await requestGitHub(
-    `/repos/${owner}/${repo}`,
-    githubRepositorySchema,
-  );
+  const ownerResult = githubOwnerParamSchema.safeParse(owner);
+  const repoResult = githubRepoParamSchema.safeParse(repo);
+
+  if (!ownerResult.success || !repoResult.success) {
+    throw new GithubValidationError(
+      "オーナー名またはリポジトリ名の形式が不正です。",
+    );
+  }
+
+  const ownerSlug = ownerResult.data;
+  const repoSlug = repoResult.data;
+  const path = `/repos/${encodeURIComponent(ownerSlug)}/${encodeURIComponent(repoSlug)}`;
+
+  const response = await requestGitHub(path, githubRepositorySchema);
 
   return {
     id: response.id,
@@ -124,7 +138,22 @@ export async function getRepositoryDetail(
   };
 }
 
+/**
+ * ユーザー向けメッセージ。GitHub API の生メッセージは漏らさない（情報推測・フィッシング対策）。
+ */
 export function toPublicError(error: unknown) {
+  if (error instanceof ZodError) {
+    return error.issues[0]?.message ?? "入力値が不正です。";
+  }
+
+  if (error instanceof GithubValidationError) {
+    return error.message;
+  }
+
+  if (error instanceof RateLimitError) {
+    return "リクエストが多すぎます。しばらく時間をおいて再度お試しください。";
+  }
+
   if (error instanceof GithubClientError) {
     if (error.status === 403) {
       return "GitHub APIのレート制限に達した可能性があります。しばらく待ってから再度お試しください。";
@@ -134,7 +163,7 @@ export function toPublicError(error: unknown) {
       return "対象のリポジトリは見つかりませんでした。";
     }
 
-    return error.message;
+    return "GitHub APIとの通信に失敗しました。時間をおいて再度お試しください。";
   }
 
   return "予期しないエラーが発生しました。";
