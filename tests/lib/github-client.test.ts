@@ -1,4 +1,10 @@
-import { getRepositoryDetail, searchRepositories, toPublicError } from "@/lib/github/client";
+import {
+  getRepositoryDetail,
+  searchRepositories,
+  toPublicError,
+  GithubClientError,
+  GithubValidationError,
+} from "@/lib/github/client";
 
 describe("github client", () => {
   it("searchRepositories returns normalized search result", async () => {
@@ -35,6 +41,32 @@ describe("github client", () => {
       forks: 30,
       openIssues: 10,
     });
+  });
+
+  it("getRepositoryDetail rejects unsafe or invalid owner/repo path segments", async () => {
+    await expect(getRepositoryDetail("../evil", "repo")).rejects.toBeInstanceOf(
+      GithubValidationError,
+    );
+    await expect(
+      getRepositoryDetail("octocat", "bad/repo"),
+    ).rejects.toBeInstanceOf(GithubValidationError);
+  });
+
+  it("searchRepositories rejects overly long query strings", async () => {
+    await expect(
+      searchRepositories({ q: "a".repeat(257), page: 1, perPage: 10 }),
+    ).rejects.toThrow();
+  });
+
+  it("toPublicError does not expose raw GitHub error bodies for generic failures", () => {
+    const message = toPublicError(
+      new GithubClientError({
+        status: 500,
+        message: "Internal server error: secret-token-hint",
+      }),
+    );
+    expect(message).not.toContain("secret-token-hint");
+    expect(message).toContain("GitHub API");
   });
 
   it("toPublicError maps GitHub rate limit errors", async () => {
